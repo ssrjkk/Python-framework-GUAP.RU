@@ -17,24 +17,22 @@
 | Проверка личных данных | API | Контроль целостности профиля |
 | Нагрузка на эндпоинты | k6 | Оценка деградации при росте запросов |
 
-Цель: показать подход к построению поддерживаемого тестового фреймворка с разделением слоёв и интеграцией в CI.
-
 ---
 
 ## Быстрый старт
 
 ```bash
 # Клонировать
-git clone https://github.com/ssrjkk/guap.ru-framework-python.git
-cd guap.ru-framework-python
+git clone https://github.com/ssrjkk/guap-test-framework-python.git
+cd guap-test-framework-python
 
 # Установить зависимости
 pip install -r requirements.txt
 
 # Запустить тесты
-pytest tests/api -v          # API-тесты
-pytest tests/ui -v           # UI-тесты (требуется браузер)
-pytest tests/load -v         # Нагрузочные сценарии (k6)
+pytest api_tests -v          # API-тесты
+pytest ui_tests -v           # UI-тесты (требуется браузер)
+pytest -m smoke            # Smoke-тесты
 
 # Сгенерировать отчёт
 pytest --alluredir=allure-results
@@ -43,152 +41,115 @@ allure serve allure-results
 
 ---
 
-## Пример теста: валидация расписания
+## Архитектура
+
+```
+.
+├── api_client/            # HTTP-клиент с retry, логированием, таймаутами
+│   ├── base.py           # BaseApiClient
+│   ├── clients.py         # Эндпоинты: GuapApiClient
+│   └── schemas.py        # Валидация схем ответов
+├── api_tests/            # API-тесты
+│   ├── conftest.py       # Фикстуры: api_client, http_session
+│   └── test_api_clients.py
+├── ui_tests/             # UI-тесты (Selenium)
+│   ├── conftest.py       # Фикстуры: driver, page, wait
+│   ├── pages/            # Page Objects
+│   │   ├── base_page.py
+│   │   ├── guap_page.py
+│   │   └── metro_page.py
+│   └── test_pages.py
+├── load_tests/           # k6-скрипты для нагрузочного тестирования
+│   ├── api_basic.js
+│   └── api_crud.js
+├── sql_tasks/            # SQL-запросы для валидации данных
+│   └── guap_db_queries.sql
+├── tests_data/          # Тестовые данные и factories
+│   └── factories.py
+├── config/               # Конфигурация из .env
+│   └── settings.py
+├── conftest.py          # Глобальные фикстуры
+└── .github/workflows/   # CI/CD
+    └── ci.yml
+```
+
+---
+
+## Пример теста
 
 ```python
-# tests/api/test_schedule.py
-def test_schedule_matches_database(api_client, db_connection):
-    """Проверяем, что расписание из API совпадает с данными в БД"""
-    group = "ИВТ-401"
+# api_tests/test_api_clients.py
+def test_api_student_by_id(api_client):
+    """GET /api/students/:id - получение студента по ID"""
+    response = api_client.get("/api/students/1")
+    assert response.status_code == 200
+    data = response.json()
+    assert "id" in data or "student_id" in data
+```
+
+```python
+# ui_tests/pages/guap_page.py
+class GuapMainPage(BasePage):
+    def open_main(self):
+        self.open("https://guap.ru")
     
-    # Получаем данные из API
-    api_response = api_client.get("/api/schedule", params={"group": group})
-    api_lessons = {lesson["id"] for lesson in api_response.json()["lessons"]}
-    
-    # Получаем данные из БД
-    db_lessons = {
-        row[0] for row in 
-        db_connection.execute(
-            "SELECT id FROM schedule WHERE group_name = %s", (group,)
-        )
-    }
-    
-    # Валидируем консистентность
-    assert api_lessons == db_lessons, "Расхождение между API и БД"
+    def is_header_visible(self):
+        return self.is_visible(self.HEADER)
 ```
 
-Этот тест ловит баги, когда данные отображаются в интерфейсе, но не сохранены корректно.
+---
+
+## Стек
+
+| Технология | Зачем |
+|------------|-------|
+| `pytest` | Оркестрация, фикстуры, маркеры `@smoke`, `@regression` |
+| `requests` | HTTP-клиент с retry и логированием |
+| `Selenium` | UI-автоматизация с Page Objects |
+| `k6` | Нагрузочное тестирование |
+| `Docker` | Воспроизводимое окружение |
+| `GitHub Actions` | CI/CD: lint → tests → report |
 
 ---
 
-## Архитектура: слои и ответственность
-
-```
-src/
-├── api/
-│   ├── client.py          # Кастомный HTTP-клиент с retry, логированием, таймаутами
-│   ├── endpoints.py       # Эндпоинты как методы: .auth.login(), .schedule.get()
-│   └── schemas.py         # Pydantic-модели для валидации ответов
-├── ui/
-│   ├── pages/             # Page Objects: LoginPage, SchedulePage
-│   └── locators/          # Централизованные селекторы (легко менять при верстке)
-├── core/
-│   ├── config.py          # Конфиги для dev/stage/prod
-│   ├── logger.py          # Структурированное логирование
-│   └── db.py              # Утилиты для подключения к PostgreSQL
-├── fixtures/
-│   ├── auth.py            # Фикстура авторизации (кеширует токен)
-│   └── data.py            # Тестовые данные: группы, пользователи
-└── tests/
-    ├── api/               # API-тесты: позитивные, негативные, граничные
-    ├── ui/                # UI-тесты: критические пользовательские сценарии
-    └── load/              # k6-скрипты: нагрузочное тестирование ключевых эндпоинтов
-```
-
-Почему так:
-- Новые тесты добавляются за 5-10 минут (не нужно разбираться в архитектуре)
-- Изменение локаторов/эндпоинтов - правка в одном месте
-- Легко мокировать зависимости для изолированных тестов
-
----
-
-## Стек и зачем он здесь
-
-| Технология | Зачем используется |
-|------------|-------------------|
-| `pytest` | Оркестрация тестов, фикстуры, параметризация, маркеры `@smoke` |
-| `requests` + `Pydantic` | HTTP-запросы + строгая валидация схем ответов |
-| `Selenium` | UI-автоматизация для сценариев, которые нельзя покрыть через API |
-| `k6` | Базовое нагрузочное тестирование: поиск узких мест в API |
-| `PostgreSQL` | Валидация консистентности: UI <-> API <-> БД |
-| `Docker` | Воспроизводимое окружение: `docker-compose up` = готовый стенд |
-| `GitHub Actions` | Автозапуск тестов на push/PR, сбор Allure-отчёта |
-| `Allure` | Наглядная отчётность: шаги, скриншоты, логи, история прогонов |
-
----
-
-## CI/CD: что запускается автоматически
-
-```yaml
-# .github/workflows/test.yml
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - lint: ruff + black     # Проверка стиля кода
-      - typecheck: mypy        # Статическая типизация
-      - test: pytest           # Запуск тестов с покрытием
-      - report: allure         # Публикация отчёта (артефакт)
-```
-
-Результат:  
-- Команда видит статус тестов прямо в PR  
-- Падения фиксируются сразу, а не на демо  
-- Отчёт Allure доступен по ссылке из комментария бота
-
----
-
-## Результаты и метрики
-
-| Метрика | Значение | Комментарий |
-|---------|----------|-------------|
-| Покрытие тестами | ~65% (по критичным модулям) | Фокус на бизнес-логике, а не на 100% "ради цифры" |
-| Время прогона (API) | ~45 сек | Параллельный запуск через `pytest-xdist` |
-| Стабильность | 98%+ успешных прогонов | Flaky <2% благодаря explicit waits и retry |
-| Найденные баги | 3 критичных, 7 средних | Пример: расхождение данных между кешем и БД |
-
----
-
-## Пример найденного бага через этот фреймворк
-
-Сценарий: Студент видит занятие в расписании, но при переходе - 404.
-
-Как нашли:
-1. Тест берёт список занятий из API -> получает ID `12345`
-2. Переходит по ссылке `/lesson/12345` в UI
-3. Ожидает статус 200 -> получает 404
-
-Причина:  
-Кеш фронтенда не инвалидировался после удаления занятия в админке.
-
-Результат:  
-Баг заведён в Jira, исправлен в следующем релизе.  
-Именно для таких кейсов нужна валидация UI <-> API <-> БД.
-
----
-
-## Запуск в Docker (локально)
+## Запуск в Docker
 
 ```bash
-# Поднять окружение (БД + приложение)
-docker-compose up -d
-
-# Запустить тесты внутри контейнера
-docker-compose run tests pytest tests/api -v
-
-# Очистить
-docker-compose down -v
+docker build -t qa-tests .
+docker run --rm qa-tests pytest api_tests -v
+docker run --rm qa-tests pytest ui_tests -v
 ```
-
-Это гарантирует: "у меня работает" = "работает у всех".
 
 ---
 
-## Что дальше (идеи для развития)
+## CI/CD
 
-- [ ] Добавить моки внешних сервисов через `responses` / `wiremock`
-- [ ] Внедрить контрактное тестирование (Pact) для API
-- [ ] Расширить нагрузочные сценарии: пиковая нагрузка, стресс-тест
-- [ ] Интегрировать уведомления в Telegram при падениях в CI
+GitHub Actions автоматически запускает:
+1. **lint** — flake8 проверка стиля
+2. **api-tests** — API тесты
+3. **ui-tests** — UI тесты
+4. **generate-report** — Allure отчёт
+
+---
+
+## Качество кода
+
+```bash
+# Проверка стиля
+flake8 . --max-line-length=120
+
+# Все тесты
+pytest -v
+
+# По тегам
+pytest -m smoke
+pytest -m regression
+pytest -m critical
+```
+
+---
+
+## Контакты
+
+- Telegram: @ssrjkk
+- Email: ray013lefe@gmail.com
