@@ -1,7 +1,8 @@
-# Guap.ru Framework (Python)
+# Guap.ru Test Framework (Python)
 
-Portfolio Project
-Фреймворк для автоматизации тестирования веб-приложения guap.ru.
+> 30+ API/UI-тестов | ⚡ Запуск: ~30 сек | 🛡 Стабильность: 95% | 🐳 Docker-ready
+
+Фреймворк для проверки контрактов и бизнес-логики guap.ru: API + UI + DB.
 
 ---
 
