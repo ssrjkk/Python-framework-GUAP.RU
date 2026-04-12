@@ -1,7 +1,6 @@
 # Guap.ru Framework (Python)
 
 Portfolio Project
-
 Фреймворк для автоматизации тестирования веб-приложения guap.ru.
 
 ---
