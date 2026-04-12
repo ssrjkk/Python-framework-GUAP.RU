@@ -163,12 +163,13 @@ class GuapMainPage(BasePage):
 4. Распакуй и открой `index.html` в браузере
 
 Или локально:
+
 ```bash
 # Сгенерировать отчёт из артефактов
 allure generate allure-results -o allure-report --clean
 allure open allure-report
 
----
+````
 
 ## Контакты
 
